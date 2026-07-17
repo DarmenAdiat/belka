@@ -1,4 +1,15 @@
 import { ref, onUnmounted } from 'vue'
+import { CARD_VALUE_WORDS, CARD_SUIT_WORDS } from '~/utils/cardParser'
+
+// JSGF grammar listing every card word — helps Chrome/Edge pick the right words
+// Safari/iOS ignores grammars silently
+const CARD_GRAMMAR = [
+  '#JSGF V1.0 UTF-8 ru;',
+  'grammar cards;',
+  `public <value> = ${CARD_VALUE_WORDS.join(' | ')};`,
+  `public <suit>  = ${CARD_SUIT_WORDS.join(' | ')};`,
+  'public <card>  = <value> <suit> | <suit> <value>;',
+].join('\n')
 
 export function useSpeechRecognition(
   onResult: (transcripts: string[]) => void,
@@ -27,6 +38,15 @@ export function useSpeechRecognition(
     r.continuous = false
     r.interimResults = true
     r.maxAlternatives = 5
+
+    // Attach grammar hints where supported (Chrome/Edge); Safari ignores silently
+    const GrammarList = (window as any).SpeechGrammarList || (window as any).webkitSpeechGrammarList
+    if (GrammarList) {
+      const list = new GrammarList()
+      list.addFromString(CARD_GRAMMAR, 1)
+      r.grammars = list
+      console.log('[SR] SpeechGrammarList attached')
+    }
 
     console.log('[SR] Starting recognition with lang=ru-RU')
 
