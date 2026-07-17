@@ -11,21 +11,16 @@ export function useSpeechRecognition(
   let current: any = null
 
   if (import.meta.client) {
-    const API = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    console.log('[SR] SpeechRecognition API:', API ? 'found' : 'NOT FOUND')
-    console.log('[SR] webkitSpeechRecognition:', !!(window as any).webkitSpeechRecognition)
-    console.log('[SR] SpeechRecognition:', !!(window as any).SpeechRecognition)
-    if (API) isSupported.value = true
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    const gum = !!navigator.mediaDevices?.getUserMedia
+    console.log('[SR] SpeechRecognition API:', SR ? 'found' : 'NOT FOUND')
+    console.log('[SR] getUserMedia:', gum ? 'found' : 'NOT FOUND')
+    if (SR) isSupported.value = true
   }
 
-  function startListening(): void {
-    if (!import.meta.client || isListening.value) return
-
+  function startRecognition(): void {
     const API = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!API) {
-      console.error('[SR] No SpeechRecognition API available')
-      return
-    }
+    if (!API) return
 
     const r = new API()
     r.lang = 'ru-RU'
@@ -33,73 +28,52 @@ export function useSpeechRecognition(
     r.interimResults = true
     r.maxAlternatives = 5
 
-    console.log('[SR] Created instance, lang=ru-RU, starting...')
+    console.log('[SR] Starting recognition with lang=ru-RU')
 
-    r.onaudiostart = () => console.log('[SR] onaudiostart — microphone opened')
-    r.onaudioend = () => console.log('[SR] onaudioend — microphone closed')
-
-    r.onsoundstart = () => {
-      console.log('[SR] onsoundstart — sound detected')
-      onSoundStart?.()
-    }
-    r.onsoundend = () => console.log('[SR] onsoundend')
-
+    r.onaudiostart = () => console.log('[SR] onaudiostart — mic opened')
+    r.onaudioend  = () => console.log('[SR] onaudioend — mic closed')
+    r.onsoundstart = () => { console.log('[SR] onsoundstart'); onSoundStart?.() }
+    r.onsoundend  = () => console.log('[SR] onsoundend')
     r.onspeechstart = () => console.log('[SR] onspeechstart — SPEECH detected!')
-    r.onspeechend = () => console.log('[SR] onspeechend')
+    r.onspeechend   = () => console.log('[SR] onspeechend')
 
     r.onresult = (event: any) => {
       const result = event.results[event.results.length - 1]
       console.log('[SR] onresult isFinal:', result.isFinal)
       for (let j = 0; j < result.length; j++) {
-        console.log(`[SR]   alternative[${j}]:`, JSON.stringify(result[j].transcript), 'confidence:', result[j].confidence)
+        console.log(`[SR]   [${j}]: "${result[j].transcript}" (confidence: ${result[j].confidence})`)
       }
-
       if (result.isFinal) {
         isListening.value = false
-        const transcripts: string[] = []
-        for (let i = 0; i < event.results.length; i++) {
+        const all: string[] = []
+        for (let i = 0; i < event.results.length; i++)
           for (let j = 0; j < event.results[i].length; j++) {
             const t = event.results[i][j].transcript.trim()
-            if (t) transcripts.push(t)
+            if (t) all.push(t)
           }
-        }
-        console.log('[SR] Final transcripts:', transcripts)
-        onResult(transcripts)
+        onResult(all)
       } else {
-        const interim = result[0]?.transcript ?? ''
-        console.log('[SR] Interim:', JSON.stringify(interim))
-        if (interim) onInterim?.(interim)
+        onInterim?.(result[0]?.transcript ?? '')
       }
     }
 
-    r.onnomatch = () => console.warn('[SR] onnomatch — no match found')
-
+    r.onnomatch = () => console.warn('[SR] onnomatch')
     r.onerror = (event: any) => {
       console.error('[SR] onerror:', event.error, '| message:', event.message)
       isListening.value = false
       if (event.error === 'aborted') return
-      if (event.error === 'no-speech') {
-        onError('Ничего не услышано — попробуйте ещё раз')
-      } else if (event.error === 'not-allowed') {
-        onError('Нет доступа к микрофону')
-      } else if (event.error === 'network') {
-        onError('Нет сети — распознавание недоступно')
-      } else {
-        onError(`Ошибка: ${event.error}`)
-      }
+      if (event.error === 'no-speech')  onError('Ничего не услышано — попробуйте ещё раз')
+      else if (event.error === 'not-allowed') onError('Нет доступа к микрофону')
+      else if (event.error === 'network')     onError('Нет сети — распознавание недоступно')
+      else onError(`Ошибка: ${event.error}`)
     }
-
-    r.onend = () => {
-      console.log('[SR] onend — recognition ended')
-      isListening.value = false
-      current = null
-    }
+    r.onend = () => { console.log('[SR] onend'); isListening.value = false; current = null }
 
     current = r
     try {
       r.start()
       isListening.value = true
-      console.log('[SR] start() called OK, isListening=true')
+      console.log('[SR] start() OK')
     } catch (e) {
       console.error('[SR] start() threw:', e)
       isListening.value = false
@@ -108,16 +82,50 @@ export function useSpeechRecognition(
     }
   }
 
-  function stopListening(): void {
-    console.log('[SR] stopListening called')
-    if (current) {
-      try { current.abort() } catch {}
-      current = null
+  function startListening(): void {
+    if (!import.meta.client || isListening.value) return
+
+    // Test getUserMedia first to see if the mic is reachable at all
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.warn('[SR] getUserMedia not available, starting SR directly')
+      startRecognition()
+      return
     }
+
+    console.log('[SR] Testing mic with getUserMedia...')
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        const t = stream.getAudioTracks()[0]
+        console.log('[SR] getUserMedia OK → track:', t?.label,
+          '| enabled:', t?.enabled,
+          '| muted:', t?.muted,
+          '| readyState:', t?.readyState)
+
+        // Release the stream before handing off to SpeechRecognition
+        stream.getTracks().forEach(tr => tr.stop())
+        console.log('[SR] Track stopped, starting SpeechRecognition...')
+
+        startRecognition()
+      })
+      .catch(err => {
+        console.error('[SR] getUserMedia FAILED:', err.name, '—', err.message)
+        isListening.value = false
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          onError('Доступ к микрофону запрещён')
+        } else if (err.name === 'NotFoundError') {
+          onError('Микрофон не найден')
+        } else {
+          onError('Ошибка микрофона: ' + err.message)
+        }
+      })
+  }
+
+  function stopListening(): void {
+    console.log('[SR] stopListening')
+    if (current) { try { current.abort() } catch {}; current = null }
     isListening.value = false
   }
 
   onUnmounted(stopListening)
-
   return { isListening, isSupported, startListening, stopListening }
 }
