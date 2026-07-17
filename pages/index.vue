@@ -20,6 +20,7 @@ const snackbar = reactive({
 })
 const confirmReset = ref(false)
 const isSoundDetected = ref(false)
+const interimText = ref('')
 
 function showSnack(message: string, color: typeof snackbar.color) {
   snackbar.message = message
@@ -54,14 +55,24 @@ function handleSoundStart() {
   isSoundDetected.value = true
 }
 
+function handleInterim(text: string) {
+  interimText.value = text
+}
+
 const { isListening, isSupported, startListening, stopListening } =
-  useSpeechRecognition(handleTranscripts, handleError, handleSoundStart)
+  useSpeechRecognition(handleTranscripts, handleError, handleSoundStart, handleInterim)
+
+watch(isListening, (val) => {
+  if (!val) {
+    interimText.value = ''
+    isSoundDetected.value = false
+  }
+})
 
 function onMicClick() {
   if (isListening.value) {
     stopListening()
   } else {
-    isSoundDetected.value = false
     startListening()
   }
 }
@@ -76,7 +87,6 @@ function handleUndo() {
 
 function handleReset() {
   resetGame()
-  lastRecognized.value = null
   confirmReset.value = false
   showSnack('Новая игра', 'info')
 }
@@ -160,8 +170,16 @@ const suitColorClass = (suit: Suit) =>
 
         <!-- Listening hint -->
         <Transition name="fade">
-          <div v-if="isListening" class="listening-hint" :class="{ 'listening-hint--sound': isSoundDetected }">
-            {{ isSoundDetected ? '🎙 Слышу вас...' : 'Назовите карту' }}
+          <div v-if="isListening" class="listening-hint" :class="{ 'listening-hint--sound': !!interimText }">
+            <template v-if="interimText">
+              {{ interimText }}
+            </template>
+            <template v-else-if="isSoundDetected">
+              Обрабатываю...
+            </template>
+            <template v-else>
+              Назовите карту
+            </template>
           </div>
         </Transition>
 
