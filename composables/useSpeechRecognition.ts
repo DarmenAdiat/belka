@@ -1,8 +1,6 @@
 import { ref, onUnmounted } from 'vue'
 import { CARD_VALUE_WORDS, CARD_SUIT_WORDS } from '~/utils/cardParser'
 
-// JSGF grammar listing every card word — helps Chrome/Edge pick the right words
-// Safari/iOS ignores grammars silently
 const CARD_GRAMMAR = [
   '#JSGF V1.0 UTF-8 ru;',
   'grammar cards;',
@@ -11,83 +9,105 @@ const CARD_GRAMMAR = [
   'public <card>  = <value> <suit> | <suit> <value>;',
 ].join('\n')
 
+const LOOPBACK_RE = /стерео\s*микш|stereo\s*mix|what\s*u\s*hear|wave\s*out\s*mix/i
+
 export function useSpeechRecognition(
   onResult: (transcripts: string[]) => void,
   onError: (message: string) => void,
   onSoundStart?: () => void,
   onInterim?: (text: string) => void,
 ) {
-  const isListening = ref(false)
-  const isSupported = ref(false)
+  const isSessionActive = ref(false)
+  const isListening    = ref(false)
+  const isSupported    = ref(false)
   let current: any = null
+  let restartTimer: ReturnType<typeof setTimeout> | null = null
 
   if (import.meta.client) {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    const gum = !!navigator.mediaDevices?.getUserMedia
-    console.log('[SR] SpeechRecognition API:', SR ? 'found' : 'NOT FOUND')
-    console.log('[SR] getUserMedia:', gum ? 'found' : 'NOT FOUND')
+    console.log('[SR] API:', SR ? 'found' : 'NOT FOUND')
     if (SR) isSupported.value = true
   }
 
-  function startRecognition(): void {
+  function scheduleRestart(): void {
+    if (!isSessionActive.value) return
+    restartTimer = setTimeout(() => {
+      if (isSessionActive.value) doRecognition()
+    }, 300)
+  }
+
+  function doRecognition(): void {
+    if (!import.meta.client || !isSessionActive.value) return
     const API = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!API) return
 
     const r = new API()
     r.lang = 'ru-RU'
-    r.continuous = false
+    r.continuous = true   // Stay active after each utterance — critical for iOS auto-restart
     r.interimResults = true
     r.maxAlternatives = 5
 
-    // Attach grammar hints where supported (Chrome/Edge); Safari ignores silently
-    const GrammarList = (window as any).SpeechGrammarList || (window as any).webkitSpeechGrammarList
-    if (GrammarList) {
-      const list = new GrammarList()
+    const GL = (window as any).SpeechGrammarList || (window as any).webkitSpeechGrammarList
+    if (GL) {
+      const list = new GL()
       list.addFromString(CARD_GRAMMAR, 1)
       r.grammars = list
-      console.log('[SR] SpeechGrammarList attached')
     }
 
-    console.log('[SR] Starting recognition with lang=ru-RU')
-
-    r.onaudiostart = () => console.log('[SR] onaudiostart — mic opened')
-    r.onaudioend  = () => console.log('[SR] onaudioend — mic closed')
-    r.onsoundstart = () => { console.log('[SR] onsoundstart'); onSoundStart?.() }
-    r.onsoundend  = () => console.log('[SR] onsoundend')
-    r.onspeechstart = () => console.log('[SR] onspeechstart — SPEECH detected!')
+    r.onaudiostart  = () => console.log('[SR] onaudiostart')
+    r.onaudioend    = () => console.log('[SR] onaudioend')
+    r.onsoundstart  = () => { console.log('[SR] onsoundstart'); onSoundStart?.() }
+    r.onsoundend    = () => console.log('[SR] onsoundend')
+    r.onspeechstart = () => console.log('[SR] onspeechstart')
     r.onspeechend   = () => console.log('[SR] onspeechend')
 
     r.onresult = (event: any) => {
+      // With continuous=true, event.results accumulates all results — only process the latest
       const result = event.results[event.results.length - 1]
-      console.log('[SR] onresult isFinal:', result.isFinal)
+      if (!result.isFinal) {
+        const interim = result[0]?.transcript ?? ''
+        console.log('[SR] interim:', JSON.stringify(interim))
+        onInterim?.(interim)
+        return
+      }
+      // Final result: collect all alternatives from this one result only
+      onInterim?.('')  // clear interim display
+      const all: string[] = []
       for (let j = 0; j < result.length; j++) {
-        console.log(`[SR]   [${j}]: "${result[j].transcript}" (confidence: ${result[j].confidence})`)
+        const t = result[j].transcript.trim()
+        console.log(`[SR] final[${j}]:`, JSON.stringify(t), 'conf:', result[j].confidence)
+        if (t) all.push(t)
       }
-      if (result.isFinal) {
-        isListening.value = false
-        const all: string[] = []
-        for (let i = 0; i < event.results.length; i++)
-          for (let j = 0; j < event.results[i].length; j++) {
-            const t = event.results[i][j].transcript.trim()
-            if (t) all.push(t)
-          }
-        onResult(all)
-      } else {
-        onInterim?.(result[0]?.transcript ?? '')
-      }
+      onResult(all)
     }
 
     r.onnomatch = () => console.warn('[SR] onnomatch')
+
     r.onerror = (event: any) => {
-      console.error('[SR] onerror:', event.error, '| message:', event.message)
-      isListening.value = false
+      console.error('[SR] onerror:', event.error)
       if (event.error === 'aborted') return
-      if (event.error === 'no-speech')  onError('Ничего не услышано — попробуйте ещё раз')
-      else if (event.error === 'not-allowed') onError('Нет доступа к микрофону')
-      else if (event.error === 'network')     onError('Нет сети — распознавание недоступно')
-      else onError(`Ошибка: ${event.error}`)
+      if (event.error === 'no-speech') return  // onend fires next → scheduleRestart
+      if (event.error === 'not-allowed') {
+        isSessionActive.value = false
+        isListening.value = false
+        onError('Нет доступа к микрофону')
+        return
+      }
+      if (event.error === 'network') {
+        onError('Нет сети — распознавание недоступно')
+        return
+      }
+      onError(`Ошибка: ${event.error}`)
     }
-    r.onend = () => { console.log('[SR] onend'); isListening.value = false; current = null }
+
+    r.onend = () => {
+      console.log('[SR] onend')
+      isListening.value = false
+      current = null
+      // iOS terminates continuous sessions after ~60s; restart immediately from onend
+      // (iOS allows start() within onend context even without a fresh user gesture)
+      scheduleRestart()
+    }
 
     current = r
     try {
@@ -98,64 +118,54 @@ export function useSpeechRecognition(
       console.error('[SR] start() threw:', e)
       isListening.value = false
       current = null
-      onError('Не удалось запустить микрофон')
+      scheduleRestart()
     }
   }
 
-  function startListening(): void {
-    if (!import.meta.client || isListening.value) return
+  async function startSession(): Promise<void> {
+    if (isSessionActive.value) return
 
-    // Test getUserMedia first to see if the mic is reachable at all
-    if (!navigator.mediaDevices?.getUserMedia) {
-      console.warn('[SR] getUserMedia not available, starting SR directly')
-      startRecognition()
-      return
-    }
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const track  = stream.getAudioTracks()[0]
+        console.log('[SR] getUserMedia OK:', track?.label)
+        stream.getTracks().forEach(t => t.stop())
 
-    console.log('[SR] Testing mic with getUserMedia...')
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(stream => {
-        const t = stream.getAudioTracks()[0]
-        const label = t?.label ?? ''
-        console.log('[SR] getUserMedia OK → track:', label,
-          '| enabled:', t?.enabled,
-          '| muted:', t?.muted,
-          '| readyState:', t?.readyState)
-
-        stream.getTracks().forEach(tr => tr.stop())
-
-        // Loopback devices (Stereo Mix, What U Hear, etc.) capture speaker output,
-        // not the microphone. Chrome Speech API uses the same default device.
-        const LOOPBACK = /стерео\s*микш|stereo\s*mix|what\s*u\s*hear|wave\s*out\s*mix|sum\s*\(/i
-        if (LOOPBACK.test(label)) {
-          console.warn('[SR] Loopback device detected:', label, '— speech recognition will not work')
-          onError(`Устройство "${label}" не является микрофоном. Установите микрофон устройством по умолчанию в Параметры звука → Ввод.`)
-          isListening.value = false
+        if (LOOPBACK_RE.test(track?.label ?? '')) {
+          onError(`"${track?.label}" — не микрофон. Выберите реальный микрофон в Параметры → Звук → Ввод.`)
           return
         }
-
-        console.log('[SR] Track stopped, starting SpeechRecognition...')
-        startRecognition()
-      })
-      .catch(err => {
-        console.error('[SR] getUserMedia FAILED:', err.name, '—', err.message)
-        isListening.value = false
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          onError('Доступ к микрофону запрещён')
-        } else if (err.name === 'NotFoundError') {
+      } catch (err: any) {
+        console.error('[SR] getUserMedia failed:', err.name)
+        if (err.name === 'NotFoundError') {
           onError('Микрофон не найден')
         } else {
-          onError('Ошибка микрофона: ' + err.message)
+          onError('Нет доступа к микрофону')
         }
-      })
+        return
+      }
+    }
+
+    console.log('[SR] Session started')
+    isSessionActive.value = true
+    doRecognition()
   }
 
-  function stopListening(): void {
-    console.log('[SR] stopListening')
+  function stopSession(): void {
+    console.log('[SR] Session stopped')
+    isSessionActive.value = false
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null }
     if (current) { try { current.abort() } catch {}; current = null }
     isListening.value = false
   }
 
-  onUnmounted(stopListening)
-  return { isListening, isSupported, startListening, stopListening }
+  function toggleSession(): void {
+    if (isSessionActive.value) stopSession()
+    else startSession()
+  }
+
+  onUnmounted(stopSession)
+
+  return { isSessionActive, isListening, isSupported, toggleSession }
 }

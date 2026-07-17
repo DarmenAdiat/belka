@@ -12,29 +12,35 @@ const VALUE_MAP: Record<string, Value> = {
   семь: '7',   восемь: '8',  девять: '9',  десять: '10',
   валет: 'J',  дама: 'Q',    король: 'K',  туз: 'A',
 
-  // Digit strings (ASR sometimes emits digits directly)
+  // Digit strings — Chrome ASR often emits digits directly
   '7': '7', '8': '8', '9': '9', '10': '10',
 
   // Inflected & truncated forms
   семи: '7',     семью: '7',
-  восем: '8',    восьми: '8',    восьмью: '8',
-  девяти: '9',   девят: '9',     девятью: '9',
-  десяти: '10',  десят: '10',    десятью: '10', десяток: '10',
+  восем: '8',    восьми: '8',   восьмью: '8',
+  девяти: '9',   девят: '9',    девятью: '9',
 
-  валету: 'J',   валета: 'J',    валетом: 'J',
-  дамы: 'Q',     даму: 'Q',      дамой: 'Q',
-  короля: 'K',   королей: 'K',   королю: 'K',  королём: 'K', королем: 'K',
-  туза: 'A',     тузу: 'A',      тузы: 'A',    тузом: 'A',
+  // "Десять" — many forms because Chrome is inconsistent here
+  десяти: '10',  десят: '10',   десятью: '10',
+  десятка: '10', десятки: '10', десятку: '10', десятке: '10',
+  десяткой: '10', десяткою: '10',
+  десятый: '10', десятая: '10', десятую: '10', десятого: '10',
+  десяток: '10',
 
-  // Known iOS / Chrome ASR misrecognitions
-  балет: 'J',    // валет → балет  (в/б confusion)
-  залет: 'J',    // валет → залет
-  лама: 'Q',     // дама → лама
-  тус: 'A',      // туз (informal)
-  туса: 'A',
-  двести: '10',  // "десять" → "двести" (iOS ASR confusion)
-  '200': '10',   // same, digit form
-  десятки: '10',
+  валету: 'J',   валета: 'J',   валетом: 'J',
+  дамы: 'Q',     даму: 'Q',     дамой: 'Q',
+  короля: 'K',   королей: 'K',  королю: 'K',  королём: 'K', королем: 'K',
+  туза: 'A',     тузу: 'A',     тузы: 'A',    тузом: 'A',
+
+  // Known iOS / Chrome misrecognitions
+  балет: 'J',   залет: 'J',
+  лама: 'Q',
+  тус: 'A',     туса: 'A',
+  двести: '10', '200': '10',  // "десять" misheard as "двести"
+
+  // English fallback (in case lang detection glitches)
+  ten: '10', jack: 'J', queen: 'Q', king: 'K', ace: 'A',
+  seven: '7', eight: '8', nine: '9',
 }
 
 // ─── Suit map ─────────────────────────────────────────────────────────────────
@@ -45,9 +51,9 @@ const SUIT_MAP: Record<string, Suit> = {
   пиковый: 'spades', пиковая: 'spades', пиковой: 'spades',
 
   // Hearts
-  червей: 'hearts',  черви: 'hearts',  черва: 'hearts',  червы: 'hearts',
-  чёрви: 'hearts',   черво: 'hearts',
-  червям: 'hearts',  червями: 'hearts', червях: 'hearts',
+  червей: 'hearts', черви: 'hearts', черва: 'hearts',  червы: 'hearts',
+  чёрви: 'hearts',  черво: 'hearts',
+  червям: 'hearts', червями: 'hearts', червях: 'hearts',
   червонный: 'hearts', червонная: 'hearts', червонной: 'hearts',
 
   // Diamonds
@@ -57,11 +63,11 @@ const SUIT_MAP: Record<string, Suit> = {
   бубновый: 'diamonds', бубновая: 'diamonds', бубновой: 'diamonds',
 
   // Clubs
-  треф: 'clubs',    трефы: 'clubs',  трефей: 'clubs',  трефу: 'clubs',
-  трефам: 'clubs',  трефами: 'clubs',
+  треф: 'clubs',  трефы: 'clubs',  трефей: 'clubs',  трефу: 'clubs',
+  трефам: 'clubs', трефами: 'clubs',
   трефовый: 'clubs', трефовая: 'clubs', трефовой: 'clubs',
-  крести: 'clubs',   крестей: 'clubs', кресту: 'clubs',  крест: 'clubs',
-  крестам: 'clubs',  крестами: 'clubs',
+  крести: 'clubs',  крестей: 'clubs', кресту: 'clubs',  крест: 'clubs',
+  крестам: 'clubs', крестами: 'clubs',
   крестовый: 'clubs', крестовая: 'clubs', крестовой: 'clubs',
 }
 
@@ -83,11 +89,10 @@ function levenshtein(a: string, b: string): number {
   return row[n]
 }
 
-// Max allowed edit distance scaled by word length
 function distLimit(len: number): number {
-  if (len <= 3) return 0  // short words: exact only
-  if (len <= 5) return 1  // medium: 1 char diff
-  return 2                 // longer: 2 chars diff
+  if (len <= 3) return 0
+  if (len <= 5) return 1
+  return 2
 }
 
 function fuzzyLookup<T>(word: string, map: Record<string, T>): T | undefined {
@@ -111,28 +116,36 @@ function fuzzyLookup<T>(word: string, map: Record<string, T>): T | undefined {
 export function parseCard(transcript: string): CardId | null {
   const words = transcript
     .toLowerCase()
-    .replace(/[.,!?;:'"«»]/g, '')
+    .replace(/[.,!?;:'"«»\-]/g, '')
     .trim()
     .split(/\s+/)
+
+  console.log('[PARSE] transcript:', JSON.stringify(transcript), '→ words:', words)
 
   let value: Value | undefined
   let suit: Suit | undefined
 
   for (const word of words) {
+    if (!word) continue
+
     if (value === undefined) {
       const v = fuzzyLookup(word, VALUE_MAP)
+      console.log(`[PARSE]   "${word}" → value: ${v ?? 'none'}`)
       if (v !== undefined) { value = v; continue }
     }
+
     if (suit === undefined) {
       const s = fuzzyLookup(word, SUIT_MAP)
+      console.log(`[PARSE]   "${word}" → suit: ${s ?? 'none'}`)
       if (s !== undefined) suit = s
     }
   }
 
-  if (value !== undefined && suit !== undefined) return { value, suit }
-  return null
+  const result = value !== undefined && suit !== undefined ? { value, suit } : null
+  console.log('[PARSE] result:', result)
+  return result
 }
 
-// Exported for grammar hints
+// Exported for SpeechGrammarList hints
 export const CARD_VALUE_WORDS = ['семь','восемь','девять','десять','валет','дама','король','туз']
 export const CARD_SUIT_WORDS  = ['пики','пик','червей','черви','бубен','бубны','треф','трефы','крести','крест']

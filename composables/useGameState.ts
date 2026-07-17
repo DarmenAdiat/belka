@@ -1,7 +1,6 @@
 import { ref, computed } from 'vue'
 import type { CardId, Suit, Value } from '~/utils/cardParser'
 
-
 export const SUITS: Suit[] = ['spades', 'hearts', 'diamonds', 'clubs']
 export const VALUES: Value[] = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
 
@@ -20,14 +19,8 @@ export const SUIT_SYMBOLS: Record<Suit, string> = {
 }
 
 export const VALUE_DISPLAY: Record<Value, string> = {
-  '7': '7',
-  '8': '8',
-  '9': '9',
-  '10': '10',
-  J: 'В',
-  Q: 'Д',
-  K: 'К',
-  A: 'Т',
+  '7': '7', '8': '8', '9': '9', '10': '10',
+  J: 'В', Q: 'Д', K: 'К', A: 'Т',
 }
 
 function cardKey(value: Value, suit: Suit): string {
@@ -57,6 +50,29 @@ export function useGameState() {
     return 'ok'
   }
 
+  function unplayCard(card: CardId): boolean {
+    const key = cardKey(card.value, card.suit)
+    if (!playedSet.value.has(key)) return false
+    const next = new Set(playedSet.value)
+    next.delete(key)
+    playedSet.value = next
+    // Remove the last occurrence from history
+    const h = [...history.value]
+    const idx = h.lastIndexOf(key)
+    if (idx !== -1) h.splice(idx, 1)
+    history.value = h
+    return true
+  }
+
+  function toggleCard(card: CardId): 'played' | 'unplayed' {
+    if (isPlayed(card.value, card.suit)) {
+      unplayCard(card)
+      return 'unplayed'
+    }
+    playCard(card)
+    return 'played'
+  }
+
   function undoLast(): CardId | null {
     if (!history.value.length) return null
     const last = history.value[history.value.length - 1]
@@ -77,6 +93,8 @@ export function useGameState() {
     history,
     isPlayed,
     playCard,
+    unplayCard,
+    toggleCard,
     undoLast,
     resetGame,
   }

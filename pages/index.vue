@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { parseCard, type Suit } from '~/utils/cardParser'
+import { parseCard, type Suit, type Value } from '~/utils/cardParser'
 import {
   useGameState,
   SUITS,
@@ -10,7 +10,7 @@ import {
 } from '~/composables/useGameState'
 import { useSpeechRecognition } from '~/composables/useSpeechRecognition'
 
-const { totalPlayed, history, isPlayed, playCard, undoLast, resetGame } =
+const { totalPlayed, history, isPlayed, playCard, toggleCard, undoLast, resetGame } =
   useGameState()
 
 const snackbar = reactive({
@@ -42,7 +42,6 @@ function handleTranscripts(transcripts: string[]) {
       return
     }
   }
-  // Show what was heard so user can understand if it's a parsing or recognition issue
   const heard = transcripts[0] ? `"${transcripts[0]}"` : ''
   showSnack(heard ? `Не понял: ${heard}` : 'Карта не распознана', 'error')
 }
@@ -59,8 +58,15 @@ function handleInterim(text: string) {
   interimText.value = text
 }
 
-const { isListening, isSupported, startListening, stopListening } =
+const { isSessionActive, isListening, isSupported, toggleSession } =
   useSpeechRecognition(handleTranscripts, handleError, handleSoundStart, handleInterim)
+
+watch(isSessionActive, (val) => {
+  if (!val) {
+    interimText.value = ''
+    isSoundDetected.value = false
+  }
+})
 
 watch(isListening, (val) => {
   if (!val) {
@@ -70,11 +76,24 @@ watch(isListening, (val) => {
 })
 
 function onMicClick() {
-  if (isListening.value) {
-    stopListening()
+  toggleSession()
+}
+
+function handleCardTap(value: Value, suit: Suit) {
+  const result = toggleCard({ value, suit })
+  const label = `${VALUE_DISPLAY[value]} ${SUIT_SYMBOLS[suit]}`
+  if (result === 'played') {
+    showSnack(`✓ ${label}`, 'success')
   } else {
-    startListening()
+    showSnack(`Отменено: ${label}`, 'info')
   }
+}
+
+function handleCardLongPress(value: Value, suit: Suit) {
+  if (isPlayed(value, suit)) return
+  playCard({ value, suit })
+  const label = `${VALUE_DISPLAY[value]} ${SUIT_SYMBOLS[suit]}`
+  showSnack(`✓ ${label}`, 'success')
 }
 
 function handleUndo() {
@@ -163,6 +182,8 @@ const suitColorClass = (suit: Suit) =>
                 :value="value"
                 :suit="suit"
                 :played="isPlayed(value, suit)"
+                @tap="handleCardTap(value, suit)"
+                @longpress="handleCardLongPress(value, suit)"
               />
             </div>
           </div>
@@ -170,7 +191,7 @@ const suitColorClass = (suit: Suit) =>
 
         <!-- Listening hint -->
         <Transition name="fade">
-          <div v-if="isListening" class="listening-hint" :class="{ 'listening-hint--sound': !!interimText }">
+          <div v-if="isSessionActive" class="listening-hint" :class="{ 'listening-hint--sound': !!interimText }">
             <template v-if="interimText">
               {{ interimText }}
             </template>
@@ -194,7 +215,7 @@ const suitColorClass = (suit: Suit) =>
         Распознавание речи не поддерживается
       </div>
       <VoiceButton
-        :is-listening="isListening"
+        :is-listening="isSessionActive"
         :is-supported="isSupported"
         @click="onMicClick"
       />
