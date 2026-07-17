@@ -12,6 +12,9 @@ export function useSpeechRecognition(
 
   if (import.meta.client) {
     const API = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    console.log('[SR] SpeechRecognition API:', API ? 'found' : 'NOT FOUND')
+    console.log('[SR] webkitSpeechRecognition:', !!(window as any).webkitSpeechRecognition)
+    console.log('[SR] SpeechRecognition:', !!(window as any).SpeechRecognition)
     if (API) isSupported.value = true
   }
 
@@ -19,26 +22,40 @@ export function useSpeechRecognition(
     if (!import.meta.client || isListening.value) return
 
     const API = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!API) return
+    if (!API) {
+      console.error('[SR] No SpeechRecognition API available')
+      return
+    }
 
-    // Always create a fresh instance — reusing an ended instance silently fails on
-    // both iOS Safari and some Chrome versions
     const r = new API()
     r.lang = 'ru-RU'
     r.continuous = false
-    r.interimResults = true   // Fires results as user speaks → avoids early no-speech timeout
+    r.interimResults = true
     r.maxAlternatives = 5
 
+    console.log('[SR] Created instance, lang=ru-RU, starting...')
+
+    r.onaudiostart = () => console.log('[SR] onaudiostart — microphone opened')
+    r.onaudioend = () => console.log('[SR] onaudioend — microphone closed')
+
     r.onsoundstart = () => {
+      console.log('[SR] onsoundstart — sound detected')
       onSoundStart?.()
     }
+    r.onsoundend = () => console.log('[SR] onsoundend')
+
+    r.onspeechstart = () => console.log('[SR] onspeechstart — SPEECH detected!')
+    r.onspeechend = () => console.log('[SR] onspeechend')
 
     r.onresult = (event: any) => {
       const result = event.results[event.results.length - 1]
+      console.log('[SR] onresult isFinal:', result.isFinal)
+      for (let j = 0; j < result.length; j++) {
+        console.log(`[SR]   alternative[${j}]:`, JSON.stringify(result[j].transcript), 'confidence:', result[j].confidence)
+      }
 
       if (result.isFinal) {
         isListening.value = false
-        // Collect all alternatives from every result in the session
         const transcripts: string[] = []
         for (let i = 0; i < event.results.length; i++) {
           for (let j = 0; j < event.results[i].length; j++) {
@@ -46,15 +63,19 @@ export function useSpeechRecognition(
             if (t) transcripts.push(t)
           }
         }
+        console.log('[SR] Final transcripts:', transcripts)
         onResult(transcripts)
       } else {
-        // Show interim text so user can see the engine is hearing them
         const interim = result[0]?.transcript ?? ''
+        console.log('[SR] Interim:', JSON.stringify(interim))
         if (interim) onInterim?.(interim)
       }
     }
 
+    r.onnomatch = () => console.warn('[SR] onnomatch — no match found')
+
     r.onerror = (event: any) => {
+      console.error('[SR] onerror:', event.error, '| message:', event.message)
       isListening.value = false
       if (event.error === 'aborted') return
       if (event.error === 'no-speech') {
@@ -69,6 +90,7 @@ export function useSpeechRecognition(
     }
 
     r.onend = () => {
+      console.log('[SR] onend — recognition ended')
       isListening.value = false
       current = null
     }
@@ -77,7 +99,9 @@ export function useSpeechRecognition(
     try {
       r.start()
       isListening.value = true
-    } catch {
+      console.log('[SR] start() called OK, isListening=true')
+    } catch (e) {
+      console.error('[SR] start() threw:', e)
       isListening.value = false
       current = null
       onError('Не удалось запустить микрофон')
@@ -85,6 +109,7 @@ export function useSpeechRecognition(
   }
 
   function stopListening(): void {
+    console.log('[SR] stopListening called')
     if (current) {
       try { current.abort() } catch {}
       current = null
