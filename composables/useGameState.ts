@@ -1,7 +1,6 @@
 import { ref, computed } from 'vue'
 import type { CardId, Suit, Value } from '~/utils/cardParser'
 
-export type { Suit, Value, CardId }
 
 export const SUITS: Suit[] = ['spades', 'hearts', 'diamonds', 'clubs']
 export const VALUES: Value[] = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']

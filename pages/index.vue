@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { parseCard } from '~/utils/cardParser'
+import { parseCard, type Suit } from '~/utils/cardParser'
 import {
   useGameState,
   SUITS,
@@ -7,8 +7,6 @@ import {
   SUIT_NAMES,
   SUIT_SYMBOLS,
   VALUE_DISPLAY,
-  type Suit,
-  type Value,
 } from '~/composables/useGameState'
 import { useSpeechRecognition } from '~/composables/useSpeechRecognition'
 
@@ -21,7 +19,7 @@ const snackbar = reactive({
   color: 'success' as 'success' | 'warning' | 'error' | 'info',
 })
 const confirmReset = ref(false)
-const lastRecognized = ref<string | null>(null)
+const isSoundDetected = ref(false)
 
 function showSnack(message: string, color: typeof snackbar.color) {
   snackbar.message = message
@@ -36,7 +34,6 @@ function handleTranscripts(transcripts: string[]) {
       const result = playCard(card)
       if (result === 'ok') {
         const label = `${VALUE_DISPLAY[card.value]} ${SUIT_SYMBOLS[card.suit]}`
-        lastRecognized.value = label
         showSnack(`✓ ${label}`, 'success')
       } else {
         showSnack('Эта карта уже вышла!', 'warning')
@@ -44,20 +41,27 @@ function handleTranscripts(transcripts: string[]) {
       return
     }
   }
-  showSnack('Карта не распознана', 'error')
+  // Show what was heard so user can understand if it's a parsing or recognition issue
+  const heard = transcripts[0] ? `"${transcripts[0]}"` : ''
+  showSnack(heard ? `Не понял: ${heard}` : 'Карта не распознана', 'error')
 }
 
 function handleError(msg: string) {
   showSnack(msg, 'error')
 }
 
+function handleSoundStart() {
+  isSoundDetected.value = true
+}
+
 const { isListening, isSupported, startListening, stopListening } =
-  useSpeechRecognition(handleTranscripts, handleError)
+  useSpeechRecognition(handleTranscripts, handleError, handleSoundStart)
 
 function onMicClick() {
   if (isListening.value) {
     stopListening()
   } else {
+    isSoundDetected.value = false
     startListening()
   }
 }
@@ -154,10 +158,10 @@ const suitColorClass = (suit: Suit) =>
           </div>
         </div>
 
-        <!-- Last recognized -->
+        <!-- Listening hint -->
         <Transition name="fade">
-          <div v-if="isListening" class="listening-hint">
-            Слушаю... назовите карту
+          <div v-if="isListening" class="listening-hint" :class="{ 'listening-hint--sound': isSoundDetected }">
+            {{ isSoundDetected ? '🎙 Слышу вас...' : 'Назовите карту' }}
           </div>
         </Transition>
 
@@ -298,10 +302,15 @@ const suitColorClass = (suit: Suit) =>
 .listening-hint {
   text-align: center;
   font-size: 13px;
-  color: #c62828;
+  color: #757575;
   font-weight: 500;
   padding: 12px 0 0;
   animation: blink 1.2s ease-in-out infinite;
+}
+
+.listening-hint--sound {
+  color: #2e7d32;
+  animation: none;
 }
 
 @keyframes blink {
