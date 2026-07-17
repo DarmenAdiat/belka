@@ -96,15 +96,25 @@ export function useSpeechRecognition(
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(stream => {
         const t = stream.getAudioTracks()[0]
-        console.log('[SR] getUserMedia OK → track:', t?.label,
+        const label = t?.label ?? ''
+        console.log('[SR] getUserMedia OK → track:', label,
           '| enabled:', t?.enabled,
           '| muted:', t?.muted,
           '| readyState:', t?.readyState)
 
-        // Release the stream before handing off to SpeechRecognition
         stream.getTracks().forEach(tr => tr.stop())
-        console.log('[SR] Track stopped, starting SpeechRecognition...')
 
+        // Loopback devices (Stereo Mix, What U Hear, etc.) capture speaker output,
+        // not the microphone. Chrome Speech API uses the same default device.
+        const LOOPBACK = /стерео\s*микш|stereo\s*mix|what\s*u\s*hear|wave\s*out\s*mix|sum\s*\(/i
+        if (LOOPBACK.test(label)) {
+          console.warn('[SR] Loopback device detected:', label, '— speech recognition will not work')
+          onError(`Устройство "${label}" не является микрофоном. Установите микрофон устройством по умолчанию в Параметры звука → Ввод.`)
+          isListening.value = false
+          return
+        }
+
+        console.log('[SR] Track stopped, starting SpeechRecognition...')
         startRecognition()
       })
       .catch(err => {
