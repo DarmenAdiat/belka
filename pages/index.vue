@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { parseCard, type Suit, type Value } from '~/utils/cardParser'
+import { parseCard, type Suit, type Value, type CardId } from '~/utils/cardParser'
 import {
   useGameState,
   SUITS,
@@ -58,8 +58,18 @@ function handleInterim(text: string) {
   interimText.value = text
 }
 
+// Called in real-time from interim results — no "already played" warning here
+// since duplicates only occur when the final result echoes what interim already caught
+function handleCardDetected(card: CardId) {
+  const result = playCard(card)
+  if (result === 'ok') {
+    const label = `${VALUE_DISPLAY[card.value]} ${SUIT_SYMBOLS[card.suit]}`
+    showSnack(`✓ ${label}`, 'success')
+  }
+}
+
 const { isSessionActive, isListening, isSupported, toggleSession } =
-  useSpeechRecognition(handleTranscripts, handleError, handleSoundStart, handleInterim)
+  useSpeechRecognition(handleTranscripts, handleError, handleSoundStart, handleInterim, handleCardDetected)
 
 watch(isSessionActive, (val) => {
   if (!val) {

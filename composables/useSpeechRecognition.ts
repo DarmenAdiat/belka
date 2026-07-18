@@ -1,5 +1,5 @@
 import { ref, onUnmounted } from 'vue'
-import { CARD_VALUE_WORDS, CARD_SUIT_WORDS } from '~/utils/cardParser'
+import { CARD_VALUE_WORDS, CARD_SUIT_WORDS, normalizeWords, parseCardFromWords, type CardId } from '~/utils/cardParser'
 
 const CARD_GRAMMAR = [
   '#JSGF V1.0 UTF-8 ru;',
@@ -16,6 +16,7 @@ export function useSpeechRecognition(
   onError: (message: string) => void,
   onSoundStart?: () => void,
   onInterim?: (text: string) => void,
+  onCardDetected?: (card: CardId) => void,
 ) {
   const isSessionActive = ref(false)
   const isListening    = ref(false)
@@ -43,7 +44,7 @@ export function useSpeechRecognition(
 
     const r = new API()
     r.lang = 'ru-RU'
-    r.continuous = true   // Stay active after each utterance — critical for iOS auto-restart
+    r.continuous = true
     r.interimResults = true
     r.maxAlternatives = 5
 
@@ -61,21 +62,51 @@ export function useSpeechRecognition(
     r.onspeechstart = () => console.log('[SR] onspeechstart')
     r.onspeechend   = () => console.log('[SR] onspeechend')
 
+    // Track how many words from the current utterance have already been consumed
+    // by real-time interim parsing. Resets to 0 on each isFinal result.
+    let consumedWordCount = 0
+
     r.onresult = (event: any) => {
-      // With continuous=true, event.results accumulates all results — only process the latest
+      // With continuous=true, event.results accumulates all utterances.
+      // We always operate on the most recent one (last in the array).
       const result = event.results[event.results.length - 1]
+      const rawTranscript: string = result[0]?.transcript ?? ''
+
       if (!result.isFinal) {
-        const interim = result[0]?.transcript ?? ''
-        console.log('[SR] interim:', JSON.stringify(interim))
-        onInterim?.(interim)
+        onInterim?.(rawTranscript)
+
+        if (onCardDetected) {
+          const words = normalizeWords(rawTranscript)
+          let offset = consumedWordCount
+          while (offset < words.length) {
+            const match = parseCardFromWords(words, offset)
+            if (!match) break
+            console.log('[SR] real-time card:', match.value, match.suit)
+            consumedWordCount = match.endIndex
+            offset = match.endIndex
+            onCardDetected({ value: match.value, suit: match.suit })
+          }
+        }
         return
       }
-      // Final result: collect all alternatives from this one result only
-      onInterim?.('')  // clear interim display
-      const all: string[] = []
-      for (let j = 0; j < result.length; j++) {
+
+      // isFinal: clear interim display
+      onInterim?.('')
+
+      // Process only words not already consumed by real-time interim parsing
+      const words = normalizeWords(rawTranscript)
+      const remaining = words.slice(consumedWordCount)
+      consumedWordCount = 0  // reset for next utterance within the continuous session
+
+      if (remaining.length === 0) return  // all cards found in real-time, nothing left
+
+      // Still try to find a card in the unconsumed tail (safety net for when
+      // interim parsing was behind, e.g. if onCardDetected is not provided)
+      const remainingText = remaining.join(' ')
+      const all = [remainingText]
+      // Add alternatives from other recognition hypotheses
+      for (let j = 1; j < result.length; j++) {
         const t = result[j].transcript.trim()
-        console.log(`[SR] final[${j}]:`, JSON.stringify(t), 'conf:', result[j].confidence)
         if (t) all.push(t)
       }
       onResult(all)
@@ -86,7 +117,7 @@ export function useSpeechRecognition(
     r.onerror = (event: any) => {
       console.error('[SR] onerror:', event.error)
       if (event.error === 'aborted') return
-      if (event.error === 'no-speech') return  // onend fires next → scheduleRestart
+      if (event.error === 'no-speech') return
       if (event.error === 'not-allowed') {
         isSessionActive.value = false
         isListening.value = false
@@ -104,8 +135,6 @@ export function useSpeechRecognition(
       console.log('[SR] onend')
       isListening.value = false
       current = null
-      // iOS terminates continuous sessions after ~60s; restart immediately from onend
-      // (iOS allows start() within onend context even without a fresh user gesture)
       scheduleRestart()
     }
 

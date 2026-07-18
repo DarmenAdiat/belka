@@ -113,21 +113,57 @@ function fuzzyLookup<T>(word: string, map: Record<string, T>): T | undefined {
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
-export function parseCard(transcript: string): CardId | null {
-  const words = transcript
+
+export function normalizeWords(transcript: string): string[] {
+  return transcript
     .toLowerCase()
     .replace(/[.,!?;:'"«»\-]/g, '')
     .trim()
     .split(/\s+/)
+    .filter(Boolean)
+}
 
+// Greedy parse from startIndex; returns matched card and index past last consumed word.
+export function parseCardFromWords(
+  words: string[],
+  startIndex: number,
+): { value: Value; suit: Suit; endIndex: number } | null {
+  let value: Value | undefined
+  let suit: Suit | undefined
+  let valueIdx = -1
+  let suitIdx = -1
+
+  for (let i = startIndex; i < words.length; i++) {
+    const word = words[i]
+    if (!word) continue
+
+    if (value === undefined) {
+      const v = fuzzyLookup(word, VALUE_MAP)
+      if (v !== undefined) { value = v; valueIdx = i; continue }
+    }
+
+    if (suit === undefined) {
+      const s = fuzzyLookup(word, SUIT_MAP)
+      if (s !== undefined) { suit = s; suitIdx = i }
+    }
+
+    if (value !== undefined && suit !== undefined) break
+  }
+
+  if (value !== undefined && suit !== undefined) {
+    return { value, suit, endIndex: Math.max(valueIdx, suitIdx) + 1 }
+  }
+  return null
+}
+
+export function parseCard(transcript: string): CardId | null {
+  const words = normalizeWords(transcript)
   console.log('[PARSE] transcript:', JSON.stringify(transcript), '→ words:', words)
 
   let value: Value | undefined
   let suit: Suit | undefined
 
   for (const word of words) {
-    if (!word) continue
-
     if (value === undefined) {
       const v = fuzzyLookup(word, VALUE_MAP)
       console.log(`[PARSE]   "${word}" → value: ${v ?? 'none'}`)
